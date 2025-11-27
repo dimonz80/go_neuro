@@ -121,15 +121,23 @@ func testMnist() {
 	var trainSetSize = len(trainSet)
 
 	fmt.Println("Start train...")
+	prevAcc := 0.0
+	dAcc := 0.0
 	for epoch := range epochs {
 		t1 := time.Now()
+		if dAcc < 0 {
+			rate *= 0.9
+		} else if dAcc < 0.001 {
+			rate *= 1.1
+		}
 		stats := net.BatchTrain(trainSet, rate, batchSize, iters)
-
+		dAcc = stats.accuracy - prevAcc
+		prevAcc = stats.accuracy
 		t2 := time.Now()
 		dt := t2.UnixMilli() - t1.UnixMilli()
 		//acc := test(trainSet, net)
 		testAcc := test(testTrainSet, net)
-		fmt.Printf("epoch=%v acc=%.4f%% testAcc=%.4f%% dt=%v\n", epoch, stats.accuracy*100.0, testAcc*100.0, dt)
+		fmt.Printf("epoch=%v acc=%.4f%% testAcc=%.4f%% dt=%v rate=%.4f\n", epoch, stats.accuracy*100.0, testAcc*100.0, dt, rate)
 	}
 
 	var randSample = trainSet[rand.Intn(trainSetSize)]

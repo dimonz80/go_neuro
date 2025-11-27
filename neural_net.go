@@ -77,16 +77,18 @@ func (l *Layer) Backward(layerIn []float64, nextLayer *Layer) {
 }
 
 // Применение поправки для весов
+var momentum = 1.9
+
 func (l *Layer) UpdateWeights(rate float64, batchSize int) {
 	for j := range l.numOut {
 		for i := range l.numIn {
 			idx := j + i*l.numOut
-			l.w[idx] += rate * l.dw[idx] / float64(batchSize)
+			l.w[idx] += rate * l.dw[idx] * momentum / float64(batchSize)
 			l.dw[idx] = 0
 		}
 		// bias
 		biasIdx := l.numIn*l.numOut + j
-		l.bias[j] += rate * l.dw[biasIdx] / float64(batchSize)
+		l.bias[j] += rate * l.dw[biasIdx] * momentum / float64(batchSize)
 		l.dw[biasIdx] = 0
 	}
 }
@@ -181,7 +183,7 @@ func (n *Net) BatchBackPropagation(inputs, sample []float64, rate float64) {
 	preOutLayer := n.layers[len(n.layers)-2]
 
 	for i := range outLayer.numOut {
-		outLayer.errors[i] = sample[i] - outLayer.outputs[i]
+		outLayer.errors[i] = (sample[i] - outLayer.outputs[i]) * outLayer.af.Df(outLayer.sums[i])
 		tmp := outLayer.errors[i]
 		for j := range outLayer.numIn {
 			outLayer.dw[i+j*outLayer.numOut] += tmp * preOutLayer.outputs[j]
