@@ -6,10 +6,10 @@ import (
 )
 
 // Обобщенная ф-ия активации
-type ActivationFunction interface {
-	F(x float64) float64             // функция активации
-	Df(x float64) float64            // производная ф-ии активации
-	Ff(src []float64, dst []float64) // функция активации над массивом
+type ActivationFunction struct {
+	F  func(x float64) float64            // функция активации
+	Df func(x float64) float64            // производная ф-ии активации
+	Ff func(src []float64, dst []float64) // функция активации над массивом
 }
 
 // Слой нейронной сети
@@ -47,25 +47,34 @@ func NewLayer(numIns, numOuts int, af ActivationFunction) *Layer {
 
 // Расчет прямого распространения
 func (l *Layer) Forward(ins []float64) {
+
 	for j := range l.numOut {
-		sum := 0.0
-		for i := range l.numIn {
-			idx := j + i*l.numOut
-			sum += l.w[idx] * ins[i]
-		}
-		l.sums[j] = sum + l.bias[j]
+		l.sums[j] = 0
 	}
-	l.af.Ff(l.sums, l.outputs)
+	for i := range l.numIn {
+		offset := i * l.numOut
+		for j := range l.numOut {
+			l.sums[j] += l.w[offset+j] * ins[i]
+		}
+	}
+	F := l.af.F
+	for j := range l.numOut {
+		l.sums[j] += l.bias[j]
+		l.outputs[j] = F(l.sums[j]) // bias + активация в одном шаге
+	}
+
 }
 
 // Обратное распространение ошибки и расчет поправки для весов
 func (l *Layer) Backward(layerIn []float64, nextLayer *Layer) {
 	for i := range nextLayer.numIn {
 		errSum := 0.0
+		df := l.af.Df(l.sums[i])
+		offset := i * nextLayer.numOut
 		for j := range nextLayer.numOut {
-			errSum += nextLayer.errors[j] * nextLayer.w[j+i*nextLayer.numOut]
+			errSum += nextLayer.errors[j] * nextLayer.w[j+offset]
 		}
-		errI := errSum * l.af.Df(l.sums[i])
+		errI := errSum * df
 		l.errors[i] = errI
 
 		for j := range l.numIn {
@@ -80,17 +89,24 @@ func (l *Layer) Backward(layerIn []float64, nextLayer *Layer) {
 var momentum = 1.9
 
 func (l *Layer) UpdateWeights(rate float64, batchSize int) {
-	for j := range l.numOut {
-		for i := range l.numIn {
-			idx := j + i*l.numOut
-			l.w[idx] += rate * l.dw[idx] * momentum / float64(batchSize)
+	k := momentum / float64(batchSize)
+	rk := rate * k
+	for i := range l.numIn {
+		offset := i * l.numOut
+		for j := range l.numOut {
+			idx := j + offset
+			l.w[idx] += l.dw[idx] * rk
 			l.dw[idx] = 0
 		}
-		// bias
-		biasIdx := l.numIn*l.numOut + j
-		l.bias[j] += rate * l.dw[biasIdx] * momentum / float64(batchSize)
+	}
+
+	biasOffset := l.numIn * l.numOut
+	for j := range l.numOut {
+		biasIdx := biasOffset + j
+		l.bias[j] += l.dw[biasIdx] * rk
 		l.dw[biasIdx] = 0
 	}
+
 }
 
 // Структура для упрощения описания слоя при инициализации сети
@@ -181,9 +197,11 @@ func (n *Net) Forward(input []float64) {
 func (n *Net) BatchBackPropagation(inputs, sample []float64, rate float64) {
 	outLayer := n.layers[len(n.layers)-1]
 	preOutLayer := n.layers[len(n.layers)-2]
-
+	nOuts := float64(len(outLayer.outputs)) // число выходов выходного слоя
+	df := outLayer.af.Df
 	for i := range outLayer.numOut {
-		outLayer.errors[i] = (sample[i] - outLayer.outputs[i]) * outLayer.af.Df(outLayer.sums[i])
+
+		outLayer.errors[i] = (2.0 * (sample[i] - outLayer.outputs[i]) / nOuts) * df(outLayer.sums[i])
 		tmp := outLayer.errors[i]
 		for j := range outLayer.numIn {
 			outLayer.dw[i+j*outLayer.numOut] += tmp * preOutLayer.outputs[j]
@@ -281,144 +299,132 @@ func (n *Net) Query(inputs []float64) []float64 {
 	return n.Outputs()
 }
 
-// Реализация некоторых функция активации
-type Relu struct{}
+func newRelu() ActivationFunction {
+	F := func(x float64) float64 {
+		if x >= 0 {
+			return x
+		}
+		return 0
+	}
+	Df := func(x float64) float64 {
+		if x >= 0 {
+			return 1
+		}
+		return 0
+	}
 
-func (r *Relu) F(x float64) float64 {
-	if x >= 0 {
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
+	}
+	return ActivationFunction{F, Df, Ff}
+}
+
+func newParamLinear(k1 float64, k2 float64) ActivationFunction {
+
+	var x1 float64 = -0.5 / k1
+	var x2 float64 = 0.5 / k1
+	var b1 float64 = -k2 * x1
+	var b2 float64 = 1.0 - k2*x2
+
+	F := func(x float64) float64 {
+		if x < x1 {
+			return k2*x + b1
+		} else if x > x2 {
+			return k2*x + b2
+		} else {
+			return k1*x + 0.5
+		}
+	}
+
+	Df := func(x float64) float64 {
+		if x < x1 || x > x2 {
+			return k2
+		} else {
+			return k1
+		}
+	}
+
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
+	}
+
+	return ActivationFunction{F, Df, Ff}
+
+}
+
+func newSigmoid() ActivationFunction {
+	F := func(x float64) float64 {
+		return 1.0 / (1.0 + math.Exp(-x))
+	}
+	Df := func(x float64) float64 {
+		fx := F(x)
+		return fx * (1.0 - fx)
+	}
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
+	}
+	return ActivationFunction{F, Df, Ff}
+}
+
+func newLinear() ActivationFunction {
+	F := func(x float64) float64 {
 		return x
 	}
-	return 0
-}
-
-func (r *Relu) Df(x float64) float64 {
-	if x >= 0 {
+	Df := func(x float64) float64 {
 		return 1
 	}
-	return 0
-}
-
-func (r *Relu) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = r.F(src[i])
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
 	}
+	return ActivationFunction{F, Df, Ff}
 }
 
-type Sigmoid struct{}
-
-func (s *Sigmoid) F(x float64) float64 {
-	return 1.0 / (1.0 + math.Exp(-x))
-}
-
-func (s *Sigmoid) Df(x float64) float64 {
-	fx := s.F(x)
-	return fx * (1.0 - fx)
-}
-
-func (s *Sigmoid) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = s.F(src[i])
+func newWavelet() ActivationFunction {
+	F := func(x float64) float64 {
+		x2 := x * x
+		return (1 - x2) * math.Exp(-(x2 / 2.0))
 	}
-}
-
-type Linear struct{}
-
-func (l *Linear) F(x float64) float64 {
-	return x
-}
-
-func (l *Linear) Df(x float64) float64 {
-	return 1
-}
-
-func (l *Linear) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = l.F(src[i])
+	Df := func(x float64) float64 {
+		x2 := x * x
+		e := math.Exp(-(x2 / 2))
+		return e * x * (x2 - 3)
 	}
-}
-
-// Ломаная прямая
-type ParamLinear struct {
-	k1 float64
-	k2 float64
-	x1 float64
-	x2 float64
-	b1 float64
-	b2 float64
-}
-
-func NewParamLinear(k1 float64, k2 float64) *ParamLinear {
-	var x1 = -0.5 / k1
-	var x2 = 0.5 / k1
-	return &ParamLinear{k1, k2, x1, x2, -k2 * x1, 1.0 - k2*x2}
-}
-
-func (l *ParamLinear) F(x float64) float64 {
-	if x < l.x1 {
-		return l.k2*x + l.b1
-	} else if x > l.x2 {
-		return l.k2*x + l.b2
-	} else {
-		return l.k1*x + 0.5
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
 	}
-
+	return ActivationFunction{F, Df, Ff}
 }
 
-func (l *ParamLinear) Df(x float64) float64 {
-	if x < l.x1 || x > l.x2 {
-		return l.k2
-	} else {
-		return l.k1
+func newSine() ActivationFunction {
+	F := func(x float64) float64 {
+		return math.Sin(x)
 	}
-}
-
-func (l *ParamLinear) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = l.F(src[i])
+	Df := func(x float64) float64 {
+		return math.Cos(x)
 	}
-}
-
-// Вейвлет "самбреро"
-type Wavelet struct{}
-
-func (w *Wavelet) F(x float64) float64 {
-	x2 := x * x
-	return (1 - x2) * math.Exp(-(x2 / 2.0))
-}
-
-func (w *Wavelet) Df(x float64) float64 {
-	x2 := x * x
-	e := math.Exp(-(x2 / 2))
-	return e * x * (x2 - 3)
-}
-
-func (w *Wavelet) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = w.F(src[i])
+	Ff := func(src, dst []float64) {
+		for i := range src {
+			dst[i] = F(src[i])
+		}
 	}
-}
-
-type Sine struct{}
-
-func (w *Sine) F(x float64) float64 {
-	return math.Sin(x)
-}
-
-func (w *Sine) Df(x float64) float64 {
-	return math.Cos(x)
-}
-
-func (w *Sine) Ff(src, dst []float64) {
-	for i := range src {
-		dst[i] = w.F(src[i])
-	}
+	return ActivationFunction{F, Df, Ff}
 }
 
 // Export activation functions
 var (
-	relu    = &Relu{}
-	sigmoid = &Sigmoid{}
-	linear  = &Linear{}
-	wavelet = &Wavelet{}
-	sine    = &Sine{}
+	relu    = newRelu()
+	sigmoid = newSigmoid()
+	linear  = newLinear()
+	wavelet = newWavelet()
+	sine    = newSine()
 )

@@ -31,7 +31,7 @@ func loadMnist(filePath string) []TrainSample {
 		var goal = make([]float64, 10)
 		goal[category] = 1.0
 
-		for i := 1; i < len(in); i++ {
+		for i := 0; i < len(in); i++ {
 			var v, _ = strconv.Atoi(arr[i])
 			in[i] = float64(v) / 255.0
 		}
@@ -111,7 +111,7 @@ func testMnist() {
 	var net = NewNet(28*28, []LayerDescription{
 		{48, relu},
 		{128, relu},
-		{10, NewParamLinear(1, 0)},
+		{10, newParamLinear(1.0, 0.0)},
 	})
 
 	net.Accuracy = func(out, goal []float64) bool {
@@ -123,6 +123,7 @@ func testMnist() {
 	fmt.Println("Start train...")
 	prevAcc := 0.0
 	dAcc := 0.0
+	var totalT int64 = 0
 	for epoch := range epochs {
 		t1 := time.Now()
 		if dAcc < 0 {
@@ -135,9 +136,10 @@ func testMnist() {
 		prevAcc = stats.accuracy
 		t2 := time.Now()
 		dt := t2.UnixMilli() - t1.UnixMilli()
+		totalT += dt
 		//acc := test(trainSet, net)
 		testAcc := test(testTrainSet, net)
-		fmt.Printf("epoch=%v acc=%.4f%% testAcc=%.4f%% dt=%v rate=%.4f\n", epoch, stats.accuracy*100.0, testAcc*100.0, dt, rate)
+		fmt.Printf("epoch=%v acc=%.4f%% testAcc=%.4f%% dt=%v totalT=%v rate=%.4f\n", epoch, stats.accuracy*100.0, testAcc*100.0, dt, totalT, rate)
 	}
 
 	var randSample = trainSet[rand.Intn(trainSetSize)]
